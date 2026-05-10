@@ -1,0 +1,97 @@
+name: Windows_UUPDump
+
+on:
+  workflow_dispatch:
+    inputs:
+      uuid:
+        description: 'UUID'
+        required: true
+      windows_version:
+         description: 'Windows版本'
+         required: true
+         type: choice
+         default: 'Windows 11'
+         options:
+           - 'Windows 10'
+           - 'Windows 11'
+      release:
+        description: '上传Release'
+        required: true
+        type: choice
+        default: 'false'
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  Windows_UUPDump:
+    runs-on: windows-latest
+
+    steps:
+
+    # 检出本仓库
+    - name: Checkout repository
+      uses: actions/checkout@main
+
+    # 替换UUID
+    - name: Replace UUID
+      shell: pwsh
+      run: |
+        $script = if ('${{ inputs.windows_version }}' -eq 'Windows 10') {
+          'uup_download_windows10.cmd'
+        } else {
+          'uup_download_windows11.cmd'
+        }
+        Write-Host "Replacing UUID in $script"
+        (Get-Content $script) -replace 'ffffffff-ffff-ffff-ffff-ffffffffffff', '${{ inputs.uuid }}' | Set-Content $script
+        "SCRIPT_NAME=$script" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    # 制作ISO
+    - name: UUPDUMP WinISO
+      shell: cmd
+      run: |
+        echo Using script: %SCRIPT_NAME%
+        dir
+        call %SCRIPT_NAME%
+
+    # 提取版本号
+    - name: Extract Version and Set Env
+      shell: pwsh
+      run: |
+        # 假设文件名来源于文件系统，或者之前的步骤
+        $fileName = (Get-Item *.iso).Name
+    
+        # 使用正则表达式提取前两段数字 (例如 19044.7981)
+        if ($fileName -match "^(\d+\.\d+)") {
+            $version = $Matches[1]
+        
+        # 将提取到的版本号写入 GitHub Actions 环境变量
+            echo "Build_VERSION=$version" >> $env:GITHUB_ENV
+        
+            Write-Host "成功提取版本号: $version"
+        } else {
+            Write-Error "无法从文件名 $fileName 中提取版本号"
+            exit 1
+        }
+
+    # 上传镜像
+    - name: Upload artifact
+      uses: actions/upload-artifact@main
+      with:
+        name: ${{env.Build_VERSION}}
+        path: ${{env.Build_VERSION}}*.iso
+
+    # 打包
+    - name: Package binaries
+      if: ${{ github.event.inputs.release == 'true' }}
+      run: |
+        7z a -v1950M ${{env.Build_VERSION}}.7z *.iso -mx=9
+
+    # 发布镜像
+    - name: Release
+      if: ${{ github.event.inputs.release == 'true' }}
+      uses: softprops/action-gh-release@master
+      with:
+        tag_name: ${{env.Build_VERSION}}
+        name: ${{env.Build_VERSION}}
+        files: ${{env.Build_VERSION}}.7z*
